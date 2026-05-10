@@ -119,6 +119,12 @@ class CDPManager:
             closed += 1
         return closed
 
+    def new_cdp_session(self, page=None):
+        target = page or self._page
+        if not target:
+            raise ConnectionError("No page available for CDP session")
+        return target.context.new_cdp_session(target)
+
     @property
     def connected(self) -> bool:
         return self._browser is not None and self._browser.is_connected()

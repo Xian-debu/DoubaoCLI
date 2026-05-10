@@ -83,12 +83,20 @@ class AuthManager:
         target = Path(path) if path else self.cookie_path
         return parse_netscape_cookies(target, domain_filter="doubao.com")
 
-    def is_logged_in(self) -> AuthStatus:
+    def is_logged_in(self, browser_check: bool = True) -> AuthStatus:
         try:
             cookies = self.extract()
-            return self.validate(cookies)
+            status = self.validate(cookies)
         except AuthError:
-            return self.validate(self.load())
+            status = self.validate(self.load())
+        if browser_check and self.cdp and self.cdp.connected and self.cdp.page:
+            try:
+                page = self.cdp.page
+                has_chat = page.locator('textarea[placeholder*="发消息"]').count() > 0
+                status.session_valid = has_chat
+            except Exception:
+                status.session_valid = None
+        return status
 
     def refresh(self) -> bool:
         try: self.save(); return True
