@@ -98,14 +98,14 @@ class ChatSession:
             textarea.fill(prompt)
             time.sleep(max(0.3, delay * 0.1))
 
-            # Count rows before sending (to detect new assistant row)
-            rows_before = self._count_message_rows(page)
+            # Capture last text before sending (virtual list prevents row-count detection)
+            last_text_before = self._get_last_assistant_text(page, min_rows=1) or ""
 
             # Send
             textarea.press("Enter")
 
-            # Wait for response (a new row = assistant reply)
-            response = self._wait_for_response(page, timeout, rows_before)
+            # Wait for response (content-based detection, works with virtual lists)
+            response = self._wait_for_response(page, timeout, last_text_before, prompt)
 
             # Reading delay
             if response:
@@ -464,33 +464,35 @@ class ChatSession:
             return 0
 
     def _wait_for_response(self, page: Page, timeout: int = 120,
-                           rows_before: int = 0) -> str | None:
+                           last_text_before: str = "",
+                           sent_prompt: str = "") -> str | None:
         """Wait for a new assistant message to appear.
 
-        After sending a user message, waits for a new v_list_row to
-        be added (the assistant's response). Considers response
-        complete when: (1) new rows appear, and (2) text is stable
-        for 2 consecutive polls.
+        Uses content-based detection (not row counting) because Doubao
+        uses a virtual list capped at ~10 rows where old rows scroll out
+        as new ones arrive. Row count stays constant, but textContent changes.
+
+        After sending, polls the last row until:
+        (1) the text differs from last_text_before AND sent_prompt, and
+        (2) the text is stable for 2 consecutive polls.
         """
         start = time.time()
         last_text = ""
         stable_count = 0
-        has_new_row = False
 
         while time.time() - start < timeout:
             time.sleep(2)
 
-            current = self._get_last_assistant_text(page, min_rows=rows_before + 1)
+            current = self._get_last_assistant_text(page, min_rows=1)
             if current is None:
                 continue
 
-            if not has_new_row:
-                # Check if a new row appeared
-                now_rows = self._count_message_rows(page)
-                if now_rows > rows_before:
-                    has_new_row = True
+            # Skip the user's own echo (last row = sent prompt before assistant replies)
+            if current.strip() == sent_prompt.strip():
+                continue
 
-            if not has_new_row:
+            # Skip if still showing the pre-send last message
+            if last_text_before and current.strip() == last_text_before.strip():
                 continue
 
             if current == last_text:
@@ -501,7 +503,11 @@ class ChatSession:
                 last_text = current
                 stable_count = 0
 
-        return self._get_last_assistant_text(page, min_rows=rows_before + 1)
+        # Final attempt: return whatever is there (if different from before)
+        final = self._get_last_assistant_text(page, min_rows=1)
+        if final and final.strip() != last_text_before.strip() and final.strip() != sent_prompt.strip():
+            return final
+        return None
 
     def _get_last_assistant_text(self, page: Page, min_rows: int = 2) -> str | None:
         """Extract the most recent assistant message.
@@ -509,9 +515,10 @@ class ChatSession:
         Doubao DOM: .list_items > .v_list_row
         [padding, user, assistant, user, assistant, ..., padding]
 
-        The assistant's reply is the LAST non-empty row when total
-        rows exceed the minimum (min_rows ensures we don't read the
-        user's own message back).
+        Strips suggestion chips (.suggest-message-list-wrapper) from the
+        DOM before extracting textContent. This is more robust than
+        text-level regex stripping because suggestions may span multiple
+        lines or be space-concatenated.
         """
         js = f"""
         () => {{
@@ -521,35 +528,25 @@ class ChatSession:
             if (!rows || rows.length < {min_rows}) return null;
 
             // Find last row with meaningful content
-            let lastText = '';
+            let lastRow = null;
             for (let i = rows.length - 1; i >= 0; i--) {{
                 const text = rows[i].textContent?.trim();
                 if (text && text.length > 5) {{
-                    lastText = text;
+                    lastRow = rows[i];
                     break;
                 }}
             }}
-            if (!lastText) return null;
+            if (!lastRow) return null;
 
-            // Strip UI follow-up suggestions
-            const lines = lastText.split(/\\n\\n|\\n/);
-            const contentLines = [];
-            let inSuggestions = false;
-            for (let i = lines.length - 1; i >= 0; i--) {{
-                const line = lines[i].trim();
-                if (!line) continue;
-                const isSuggestion = (
-                    (line.endsWith('？') || line.endsWith('?'))
-                    && line.length < 30
-                    && (line.startsWith('你') || line.startsWith('我')
-                        || line.startsWith('能') || line.startsWith('请'))
-                );
-                if (!isSuggestion || inSuggestions) {{
-                    contentLines.unshift(line);
-                }}
-                inSuggestions = isSuggestion;
-            }}
-            return contentLines.join('\\n').trim() || lastText;
+            // Clone and strip suggestion chips before extracting text
+            const clone = lastRow.cloneNode(true);
+            const suggestionWrappers = clone.querySelectorAll('[class*="suggest-message-list-wrapper"]');
+            for (const el of suggestionWrappers) el.remove();
+            // Also strip message action bars (like/dislike/regenerate buttons)
+            const actionBars = clone.querySelectorAll('[class*="message-action-bar"]');
+            for (const el of actionBars) el.remove();
+
+            return clone.textContent?.trim() || null;
         }}
         """
         try:
