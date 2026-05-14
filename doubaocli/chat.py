@@ -12,6 +12,7 @@ from playwright.sync_api import Page
 from .config import (
     TEXTAREA_SELECTORS,
     NEW_CHAT_SELECTORS,
+    CONV_ITEM_CLASS,
     ChatResult,
     ConversationSummary,
     ImageResult,
@@ -141,10 +142,8 @@ class ChatSession:
                     el.click()
                     time.sleep(2)
                     self._current_conversation_id = None
-                    # Refresh page reference after navigation
-                    new_page = self.cdp.find_page(url_filter="doubao.com/chat")
-                    if new_page:
-                        self.cdp._page = new_page
+                    # Refresh page reference (find_page sets cdp._page internally)
+                    self.cdp.find_page(url_filter="doubao.com/chat")
                     return True
             except Exception:
                 pass
@@ -165,26 +164,30 @@ class ChatSession:
         if not page:
             return []
 
-        # The sidebar has chat-item elements with conversation titles
-        js = """
-        (limit) => {
-            const items = document.querySelectorAll('.chat-item-r3aV');
+        js = f"""
+        (limit) => {{
+            const items = document.querySelectorAll('.{CONV_ITEM_CLASS}');
             const results = [];
-            for (let i = 0; i < Math.min(items.length, limit); i++) {
-                const text = items[i].textContent?.trim() || '';
-                results.push({
-                    title: text.split('\\n')[0] || text.substring(0, 40),
+            for (let i = 0; i < Math.min(items.length, limit); i++) {{
+                const item = items[i];
+                const titleEl = item.querySelector('[class*="title"], [class*="Title"]');
+                const title = titleEl ? titleEl.textContent.trim() : item.textContent.trim();
+                const href = item.getAttribute('href') || '';
+                const id = href.split('/chat/')[1] || '';
+                results.push({{
+                    id: id || String(i),
+                    title: title.substring(0, 60),
                     preview: '',
-                });
-            }
+                }});
+            }}
             return results;
-        }
+        }}
         """
         try:
             raw = page.evaluate(js, limit)
             return [
-                ConversationSummary(id=str(i), title=r["title"], preview=r["preview"])
-                for i, r in enumerate(raw)
+                ConversationSummary(id=r["id"], title=r["title"], preview=r["preview"])
+                for r in raw
             ]
         except Exception:
             return []
@@ -304,14 +307,28 @@ class ChatSession:
     # ── File / Multimodal methods ────────────────────────────
 
     def send_with_file(self, prompt: str, file_path: str,
-                       timeout: int = 180) -> ChatResult:
-        """Upload a file and send a prompt. Returns ChatResult."""
+                       timeout: int = 180,
+                       new_conversation: bool = False) -> ChatResult:
+        """Upload a file and send a prompt.
+
+        Args:
+            new_conversation: If True, opens a new browser tab to /chat
+                              which starts a fresh conversation automatically.
+        """
         from .file_upload import upload_file
 
-        try:
-            page = self.cdp.ensure_page()
-        except Exception as e:
-            return ChatResult(error=f"Page error: {e}")
+        if new_conversation:
+            # Open a completely new tab — no conversation state = fresh conversation
+            try:
+                page = self.cdp.new_page(url="https://www.doubao.com/chat")
+                time.sleep(3)
+            except Exception as e:
+                return ChatResult(error=f"Cannot open new conversation: {e}")
+        else:
+            try:
+                page = self.cdp.ensure_page()
+            except Exception as e:
+                return ChatResult(error=f"Page error: {e}")
 
         ok = upload_file(page, file_path, wait_process=True, timeout=15)
         if not ok:
@@ -403,56 +420,8 @@ class ChatSession:
             return False
 
     def _resolve_page(self, new_conversation: bool = False) -> Page | None:
-        """Find the right page: new empty chat, or the active chat tab.
-
-        When new_conversation=True, navigates to base /chat URL.
-        Otherwise finds the most recently active doubao chat page,
-        preferring pages WITHOUT a conversation ID (empty chat state).
-        """
-        if not self.cdp.connected:
-            return None
-
-        # Collect all doubao pages
-        doubao_pages = []
-        for ctx in self.cdp._browser.contexts:
-            for pg in ctx.pages:
-                if "doubao.com" in pg.url:
-                    doubao_pages.append(pg)
-
-        if not doubao_pages:
-            # No doubao pages — navigate to chat
-            try:
-                return self.cdp.ensure_page()
-            except Exception:
-                return None
-
-        # Auto-cleanup: trim to max 5 pages
-        if len(doubao_pages) > 5:
-            self.cdp.trim_pages(max_pages=5)
-
-        if new_conversation:
-            # Navigate to base URL in the first available page
-            page = doubao_pages[0]
-            try:
-                page.goto("https://www.doubao.com/chat", timeout=15000)
-                page.wait_for_load_state("domcontentloaded")
-                time.sleep(2)
-                self.cdp._page = page
-                self._current_conversation_id = None
-                return page
-            except Exception:
-                return page
-
-        # Prefer pages at /chat (no conversation ID) — they're "fresh"
-        for pg in doubao_pages:
-            if pg.url.rstrip("/").endswith("/chat"):
-                self.cdp._page = pg
-                return pg
-
-        # Fall back to the first doubao page
-        page = doubao_pages[0]
-        self.cdp._page = page
-        return page
+        """Find the right page. Delegates to CDPManager.resolve_page()."""
+        return self.cdp.resolve_page(new_conversation)
 
     def _count_message_rows(self, page: Page) -> int:
         """Return count of .v_list_row elements in the message list."""

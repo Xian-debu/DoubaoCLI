@@ -644,6 +644,7 @@ def main():
     p.add_argument("file", help="File path to upload")
     p.add_argument("--prompt", type=str, help="Question about the file")
     p.add_argument("--timeout", type=int, default=180)
+    p.add_argument("--new", action="store_true", help="Start new conversation")
     p.set_defaults(func=cmd_upload)
 
     # pdf

@@ -47,9 +47,7 @@ class AuthManager:
     def extract(self) -> list[dict]:
         if not self.cdp or not self.cdp.connected:
             raise AuthError("CDP not connected")
-        cookies = []
-        for ctx in self.cdp._browser.contexts:
-            cookies.extend(ctx.cookies())
+        cookies = self.cdp.get_cookies()
         return [c for c in cookies if any(
             d in c.get("domain", "") for d in ["doubao.com", "bytedance.com"]
         )]

@@ -10,6 +10,8 @@ from pathlib import Path
 
 # ── Paths (configurable via env vars) ─────────────────────
 CDP_URL = os.environ.get("DOUBAO_CDP_URL", "http://localhost:9222")
+CDP_PORT = int(os.environ.get("DOUBAO_CDP_PORT", "9222"))
+BROWSER_CMD = os.environ.get("DOUBAO_BROWSER_CMD", "")  # e.g. "msedge", "google-chrome", "/custom/path"
 DEFAULT_COOKIE_PATH = Path(os.environ.get(
     "DOUBAO_COOKIE_PATH",
     Path.home() / ".doubaocli" / "cookies.txt"

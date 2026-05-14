@@ -127,10 +127,7 @@ def test_page_management():
     print(f"  Initial: {initial} pages")
 
     # Create an extra page
-    ctx = list(cdp._browser.contexts)[0]
-    pg = ctx.new_page()
-    pg.goto("https://www.doubao.com/chat", timeout=15000)
-    pg.wait_for_load_state("domcontentloaded")
+    pg = cdp.new_page("https://www.doubao.com/chat")
     time.sleep(1)
 
     pages = cdp.list_doubao_pages()

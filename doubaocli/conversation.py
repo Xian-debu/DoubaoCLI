@@ -120,9 +120,9 @@ def delete_conversation(page: Page, conv_id: str) -> bool:
                     time.sleep(1)
                     return True
 
-        # Fallback: navigate back to original page
+        # Fallback: navigate back to original page, but report failure
         if current_url and current_url != page.url:
             page.goto(current_url, timeout=10000)
-        return True
+        return False  # delete controls not found
     except Exception:
         return False

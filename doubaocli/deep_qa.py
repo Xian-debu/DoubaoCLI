@@ -81,13 +81,16 @@ class DeepQA:
             # 1. Check context health
             if self.session.should_new_conversation():
                 self._log(f"Context full ({self.session.rounds_in_current_conv} rounds). Starting new conversation...")
-                self.chat.start_fresh_conversation()
-                self.session.new_conversation()
-                time.sleep(2)
-                # Re-upload file in new conversation
-                upload_file(page, str(path), wait_process=True, timeout=30)
-                wait_for_processing(page, timeout=20)
-                time.sleep(5)
+                if self.chat.start_fresh_conversation():
+                    self.session.new_conversation()
+                    page = self.chat.cdp.ensure_page()  # refresh after navigation
+                    time.sleep(2)
+                    upload_file(page, str(path), wait_process=True, timeout=30)
+                    wait_for_processing(page, timeout=20)
+                    time.sleep(5)
+                else:
+                    self._log("ERROR: Failed to start fresh conversation, aborting")
+                    break
 
             # 2. Read conversation history
             conv_msgs = read_conversation(page)
@@ -98,16 +101,20 @@ class DeepQA:
             )
 
             if prompt_result.get("should_new_conv"):
-                self.chat.start_fresh_conversation()
-                self.session.new_conversation()
-                time.sleep(2)
-                upload_file(page, str(path), wait_process=True, timeout=30)
-                wait_for_processing(page, timeout=20)
-                time.sleep(5)
-                # Retry generation
-                prompt_result = self.prompter.generate(
-                    self.session, page, self._current_questions
-                )
+                if self.chat.start_fresh_conversation():
+                    self.session.new_conversation()
+                    page = self.chat.cdp.ensure_page()  # refresh after navigation
+                    time.sleep(2)
+                    upload_file(page, str(path), wait_process=True, timeout=30)
+                    wait_for_processing(page, timeout=20)
+                    time.sleep(5)
+                    # Retry generation
+                    prompt_result = self.prompter.generate(
+                        self.session, page, self._current_questions
+                    )
+                else:
+                    self._log("ERROR: Failed to start fresh conversation, skipping retry")
+                    prompt_result = {}
 
             question = prompt_result.get("question")
             if not question:
